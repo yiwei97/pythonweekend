@@ -1,0 +1,140 @@
+---
+title: "EC333 LT Problem Set 2"
+author: "Cheong Yi Wei"
+date: "3/14/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# Load and install packages:
+```{r}
+rm(list=ls())
+installation_needed  <- TRUE
+loading_needed <- TRUE
+package_list <- c('foreign', 'xtable', 'plm','AER','stargazer',
+                  'readstata13', 'boot', 'arm', 'lmtest', 'sem', 
+                  'bdynsys', 'ivpack')
+if(installation_needed){install.packages(package_list, repos='http://cran.us.r-project.org')}
+if(loading_needed){lapply(package_list, require, character.only = TRUE)}
+rm(list=ls())
+```
+
+#Load data
+```{r}
+fishdata <- read.dta("fishdata.dta")
+```
+
+#Question 1
+```{r}
+demandmodel <- qty ~ price + day1 + day2 + day3 + day4 + cold + rainy
+olsdemand <- lm(demandmodel, fishdata)
+summary(olsdemand)
+```
+#Question 2
+```{r}
+ivdemand <- ivreg(qty ~ price + day1 + day2 + day3 + day4 + cold + rainy | . - price +stormy + mixed, data = fishdata, x = TRUE)
+summary(ivdemand)
+#Coefficient on price is now -0.94, which is not statistically significant at the 5% significance level. This is larger in magnitude than the OLS estimation of -0.54. The coefficients represent the elasticity of demand. Under the IV estimation, one percentage increase in price leads to a larger percentage decrease in quantity demanded, so the estimated demand curve with IV is more inelastic. The OLS result is not representative of a demand curve, as it fails to account for the simultaneous causality issue with price and quantity - what it does is to run an arbitrary regression on equilibrium price and quantity.
+```
+
+#Question 3
+```{r}
+firststagedemand <- lm(price ~ stormy + mixed + day1 + day2 + day3 + day4 + cold + rainy, fishdata)
+summary(firststagedemand)
+#From the first stage regression, it is seen that the estimated coefficients of "stormy" and "mixed" are both statistically significant at the 5% significance level, so instrument is relevant. In terms of validity, it is unlikely to be violated. There would be a violation if sailing weather can affect demand for whiting. A plausible violation would be that sailing weather is correlated with weather on the shore, which can affect consumer's demand for fish on the day. That said, by controlling for "cold" and "rainy", we have accounted for this potential causal channel.
+```
+
+#Question 4
+```{r}
+#From the first stage regression in question (3), it is seen that the F statistic is 15.83, which is greater than 10, suggesting that the instrument is a strong instrument under the assumption of homoskedasticity. That being said, it is unlikely that homoskedasticity will hold, since the distribution of quantity supplied of whitings is likely to be different for days with different sailing weathers. If that is the case, standard errors will be larger, suggesting that F statistic will be lower. To calculate the Anderson-Rubin confidence interval,
+anderson.rubin.ci(ivdemand)
+#This is [ -2.23, -0.00456]. Traditional confidence interval is [-0.947-0.410, -0.947+0.410] = [-1.357, -0.537]. This suggests that the instrument is a weak instrument because the confidence interval under anderson and rubin confidence interval is wider.
+```
+
+#Question 5
+```{r}
+supplymodel <- qty ~ price + stormy + mixed
+olssupply <- lm(supplymodel, fishdata)
+summary(olssupply)
+```
+#Question 6
+```{r}
+ivsupply <- ivreg(qty ~ price + stormy + mixed | . - price + day1 + day2 + day3 + day4 + cold + rainy, data = fishdata, x = TRUE)
+summary(ivsupply)
+#In the OLS model, the estimated coefficient of price is -0.402, which suggests that price and quantity are inversely correlated. This is clearly false, and the reason for this is due to simultaneous causality as with the case of demand estimation using OLS. In the IV model, the estimated coefficient of price is 1.07, which is statistically significant at the 5% significance level. This suggests that supply is elastic, since 100% increase in prices leads to 107% increase in quantity supplied.
+```
+#Question 7
+```{r}
+firststagesupply <- lm(price ~ day1 + day2 + day3 + day4 + cold + rainy, data = fishdata)
+summary(firststagesupply)
+#From the first stage regression, it is seen that only cold weather is a statistically significant factor at the 5% significance level that affects prices through demand. As a result, all instruments except "cold" do not satisfy the instrument relevance requirement. So this eliminates "day-" and "rainy" from being good instruments. These should therefore be excluded from the first stage regression. For "cold, instrument validity may be violated if cold weather on shore is correlated with weather on the sea that day. If we assume away this possibility, it is likely that the instrument is a good instrument.
+```
+#Question 8
+```{r}
+waldtest(firststagesupply)
+#Above, we tested if the coefficients for "day-", "cold" and "rainy" is 0. Clearly, p value is 0.234, suggesting that under null hypothesis, there is a 23.4% chance of observing a more extreme value than the F statistic. This is evidence that instruments are weak. To calculate the Anderson-Rubin confidence interval,
+anderson.rubin.ci(ivsupply)
+#This is (-Infinity, -2.57] union [ 0.670). Traditional confidence interval is [1.07-1.41, 1.07+1.41] = [-0.34, 2.48]. The fact that Anderson Rubin confidence interval is unbounded and truncated suggests that the modelling assumptions must have been violated - this alludes to the fact that the instruments likely do not satisfy the assumption of relevance. There is clearly a weak instruments problem.
+```
+#Question 9
+```{r}
+# To obtain estimate the standard errors for the coefficients of price on quantity supplied, we first need to get the predicted values of quantity supplied.
+#fishdata$predicted_price <- predict(firststagesupply)
+
+# bootstrapping with 1000 replications
+stderror<- function(formula, data, indices) {
+  d <- data[indices,] # allows boot to select sample (boot selects rows from indices with replacement)
+  fit <- lm(formula, data = d)
+  return(coef(summary(fit))["price", "Std. Error"])
+} 
+results <- boot(data=fishdata, statistic=stderror,  #statistic must be a function
+                R=1000, formula=tots ~ price) 
+
+# view results
+results #Bias = true population mean - bootstrap mean
+plot(results) 
+boot.ci(results, type="bca")
+
+```
+#Question 10
+```{r}
+is.ts(fishdata)
+fishdata <- read.dta("fishdata.dta")
+
+library(xts)
+library(lubridate)
+
+fishdata$date = ymd(fishdata$date)
+fishdata_ts <- xts(subset(fishdata,select = -c(date)), order.by=as.Date(fishdata$date, "%Y-%m-%d"))
+
+stderror_ts<- function(tseries) {
+  fit <- lm(tots ~ price, tseries)
+  return(coef(summary(fit))["price", "Std. Error"])
+} 
+bootstrap_std_error <- tsboot(tseries = fishdata_ts, statistic = stderror_ts, 1000, "fixed", l = 5) #Draws samples from t = 5
+options(digits=2)
+mean.ts <- round((mean(bootstrap_std_error$t)),digits=4)
+ses.ts<- round(sd(bootstrap_std_error$t),digits=4)
+mean.ts
+ses.ts
+
+# check sensitivity!
+
+bootstrap_std_error <- tsboot(tseries = fishdata_ts, statistic = stderror_ts, 1000, "fixed", l = 10) #Draws samples from t = 10
+options(digits=2)
+mean.ts <- round((mean(bootstrap_std_error$t)),digits=4)
+ses.ts<- round(sd(bootstrap_std_error$t),digits=4)
+mean.ts
+ses.ts
+
+
+bootstrap_std_error <- tsboot(tseries = fishdata_ts, statistic = stderror_ts, 1000, "fixed", l = 15) #Draws samples from t = 15
+options(digits=2)
+mean.ts <- round((mean(bootstrap_std_error$t)),digits=4)
+ses.ts<- round(sd(bootstrap_std_error$t),digits=4)
+mean.ts
+ses.ts
+
+#Seems robust to using different clusters as mean and standard errors barely changed!
+```
